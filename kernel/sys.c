@@ -1258,13 +1258,16 @@ static inline bool should_spoof_uname(void)
 		"netbpfload",
 		"netd",
 	};
+	char comm[TASK_COMM_LEN];
 	int i;
 
 	if (!uid_eq(current_uid(), GLOBAL_ROOT_UID))
 		return false;
 
+	get_task_comm(comm, current);
+
 	for (i = 0; i < ARRAY_SIZE(tasks); i++) {
-		if (!strcmp(current->comm, tasks[i]))
+		if (strcmp(comm, tasks[i]) == 0)
 			return true;
 	}
 
@@ -1277,25 +1280,19 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 
 	down_read(&uts_sem);
 	memcpy(&tmp, utsname(), sizeof(tmp));
+	up_read(&uts_sem);
 
-	/* Spoof uname release for Android BPF userspace */
 	if (should_spoof_uname()) {
-		strlcpy(tmp.release, "5.4.186",
-			sizeof(tmp.release));
+		strscpy(tmp.release, "5.4.186", sizeof(tmp.release));
 
 		pr_debug("uname spoof applied: comm=%s pid=%d release=%s\n",
-			 current->comm,
-			 task_pid_nr(current),
-			 tmp.release);
+			 current->comm, task_pid_nr(current), tmp.release);
 	}
-
-	up_read(&uts_sem);
 
 	if (copy_to_user(name, &tmp, sizeof(tmp)))
 		return -EFAULT;
 
-	if (override_release(name->release,
-			     sizeof(name->release)))
+	if (override_release(name->release, sizeof(name->release)))
 		return -EFAULT;
 
 	if (override_architecture(name))
