@@ -1251,6 +1251,26 @@ static int override_release(char __user *release, size_t len)
 	return ret;
 }
 
+static inline bool should_spoof_uname(void)
+{
+	static const char * const tasks[] = {
+		"bpfloader",
+		"netbpfload",
+		"netd",
+	};
+	int i;
+
+	if (!uid_eq(current_uid(), GLOBAL_ROOT_UID))
+		return false;
+
+	for (i = 0; i < ARRAY_SIZE(tasks); i++) {
+		if (!strcmp(current->comm, tasks[i]))
+			return true;
+	}
+
+	return false;
+}
+
 SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 {
 	struct new_utsname tmp;
@@ -1258,24 +1278,29 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 	down_read(&uts_sem);
 	memcpy(&tmp, utsname(), sizeof(tmp));
 
-	if (!strncmp(current->comm, "bpfloader", 9) ||
-	    !strncmp(current->comm, "netbpfload", 10) ||
-	    !strncmp(current->comm, "netd", 4)) {
-		if (current_uid().val == 0) {
-			strcpy(tmp.release, "5.4.186");
-			pr_debug("fake uname: %s/%d release=%s\n",
-				 current->comm, current->pid, tmp.release);
-		}
+	/* Spoof uname release for Android BPF userspace */
+	if (should_spoof_uname()) {
+		strlcpy(tmp.release, "5.4.186",
+			sizeof(tmp.release));
+
+		pr_debug("uname spoof applied: comm=%s pid=%d release=%s\n",
+			 current->comm,
+			 task_pid_nr(current),
+			 tmp.release);
 	}
-	
+
 	up_read(&uts_sem);
+
 	if (copy_to_user(name, &tmp, sizeof(tmp)))
 		return -EFAULT;
 
-	if (override_release(name->release, sizeof(name->release)))
+	if (override_release(name->release,
+			     sizeof(name->release)))
 		return -EFAULT;
+
 	if (override_architecture(name))
 		return -EFAULT;
+
 	return 0;
 }
 
